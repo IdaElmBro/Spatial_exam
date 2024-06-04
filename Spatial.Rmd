@@ -522,6 +522,6 @@ One interesting approach could also be to model the association between the neig
 It's evident that the blue bloc did not benefit from the reform in terms of mayoral posts. 
 Instead their percentage of mayoral post decreased from 60 % to 48 % with the red bloc having a 50 % larger amount of citizens under their "local wing".  
 This does not suggest any gerrymandering from the blue bloc. 
-It's recommended to further look into possible factors defining hoe the restructuring is done and which municipalities that merge with which. It's suggested that spatial correlation could be a big factor. 
+It's recommended to further look into possible factors defining how the restructuring is done and which municipalities that merge with which. It's suggested that spatial correlation could be a big factor. 
 
 
