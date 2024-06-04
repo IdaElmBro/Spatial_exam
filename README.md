@@ -3,8 +3,11 @@
 
 ## Project Description 
 The aim of the project is to map the political outcome of the 2007 structural reform to investigate potential gerrymandering in the restructuring of the new municipalities. 
-As the reform was implemented by a single political coalition (the blue bloc), i'm investigating potential  partisan bias in deciding what municipalities to merge. 
-The hypothesis is that it's expressed as optimizing: ***1)*** number of mayoral posts, and ***2)*** number of citizens ruled over by the blue bloc ("Blå blok")
+As the reform was implemented by a single political coalition (the blue bloc), i'm investigating potential partisan bias in deciding what municipalities to merge. 
+The hypothesis is that blue bloc: 
+- ***1)*** optimizes number of mayoral posts, 
+and 
+- ***2)*** optimizes number of citizens ruled over.
 
 
 ## Outcome when running Spatial.Rmd: 
@@ -35,7 +38,7 @@ git clone https://github.com/IdaElmBro/Spatial_exam.git
 ```
 
 The analysis for the project is all contained within one markdown file: `Spatial.Rmd` (also provided as a html).
-In order to reproduce the analysis, all chunks can be run at once or one by one. The markdown both installs and loads all the required dependencies, so no setup is necessary. 
+In order to reproduce the analysis, all chunks can be run at once or one by one in the RStudio environment. The markdown both installs and loads all the required dependencies, so no setup is necessary. 
 
 
 
