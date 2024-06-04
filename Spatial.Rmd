@@ -1,0 +1,539 @@
+---
+title: "Spatial Analytics Exam"
+author: "Ida Elmose Brøcker"
+date: "2024-05-4"
+output: html_document
+---
+
+# Description 
+This markdown is produced as the digital product to my 2024 Spatial Analytics exam. 
+It generates all the visualizations displayed in the written product. 
+
+The aim of the project is to map the political outcome of the 2007 structural reform to investigate potential gerrymandering in the restructuring of the new municipalities. 
+As the reform was implemented by a single political coalition (the blue bloc), i'm investigating potential  partisan bias in deciding what municipalities to merge. 
+The hypothesis is that it's expressed as optimizing: ***1)*** number of mayoral posts, and ***2)*** number of citizens ruled over by the blue bloc ("Blå blok")
+
+
+## Outcome when running this markdown: 
+The analysis: 
+- Map of the local political structure pre- (2006) and post reform (2007) in terms of mayoral posts for the red and the blue bloc. 
+- Table of the mayoral distribution between blocs pre- (2006) and post reform (2007). 
+- Bar plot of the top 30 biggest municipalities based on population in 2007 and their mayoral color. 
+- Cartogram of the distribution based on population size post reform. 
+
+To guide further discussion, a quick analysis of the spatial autocorrelation is performed. 
+This produces: 
+- Maps of the k = 2 nearest neighbors pre- (2006) and post reform (2007). 
+- Statistics from a Monte-Carlo simulation of Moran I pre- (2006) and post reform (2007). 
+ 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Load packages
+We start of by installing and loading the required dependencies using the `pacman` library. 
+
+
+```{r load packages}
+# Load required libraries
+pacman::p_load(tidyverse, sf, ggplot2, dplyr, tmap, readxl, stringr, cartogram, spdep)
+```
+
+
+# Get citation info and session info
+To correctly reference the packages and report the operating specification and current versions of the packages, we run the following functions: 
+
+```{r session info and citation}
+# get operating information
+sessionInfo()
+
+# get citation
+citation("tidyverse") # this is run for all the loaded packages. 
+
+```
+
+
+# Read in data 
+
+The analysis is dependent on 3 types of data: 
+
+1) Firstly, we read in the `DigDag atlas` containing the demographic data on the municipalities. 
+It's in the format of a shapefile that stores the geospatial components: location, shape and attributes of the municipalities. The geometry is represented as MultiPolygons. We only read in a single layer: "Kommune".  
+
+2) Secondly, we read in an excel sheet containing data on the population of the municipalities in 2007. 
+
+3) The last is a CSV file containing data on all danish mayors and their political party between 1970-2018. 
+
+```{r read in data}
+
+# read the Shapefile
+denmark <- st_read("data/KOMMUNAL_SHAPE_UTM32-EUREF89/Kommune.shp")
+
+# load in the population csv
+befolkning <- read_excel("data/befolkningstal_2007.xls") 
+
+# load the mayor data
+mayors <- read.csv("data/borgmestre.csv", fileEncoding = "UTF-8") # read in "æ", "ø", "å"-
+
+```
+
+
+# Data wrangling - Mayors dataset 
+
+The mayor dataset only contain information on political party, since we're focusing on the coalitions (blue bloc vs red bloc), we create an extra column containing their respective bloc.   
+To facilitate an easier join with the spatial data, we remove excess whitespace from the municipality names. 
+
+Lastly, we create two seperate dataframes for 2006 and 2007 based on the "Period" column. 
+
+```{r Data wrangling - Mayors dataset}
+
+# make a block color column
+mayors <- mayors %>%
+  mutate(Blok = case_when(
+    Parti %in% c("Socialdemokratiet ", "Radikale Venstre ", "Socialistisk Folkeparti ", 
+                 "Enhedslisten ", "Alternativet ", "Veganerpartiet ") ~ "Rød blok",
+    Parti %in% c("Det Konservative Folkeparti ", "Liberal Alliance ", "Dansk Folkeparti ", 
+                 "Venstre ", "Danmarksdemokraterne ") ~ "Blå blok",
+    TRUE ~ "Other"
+  ))
+
+# view the data
+head(mayors)
+
+# remove excess whitespace 
+mayors$Kommunenavn <- gsub(" ", "", mayors$Kommunenavn, ignore.case = TRUE)
+
+# Extract start and end years from the period column
+mayors$start_year <- as.numeric(str_extract(mayors$Period, "\\d{4}(?=\\-)"))
+mayors$end_year <- as.numeric(str_extract(mayors$Period, "(?<=\\-)\\d{4}"))
+
+# Filter mayors - 2006
+mayors_2006 <- mayors %>%
+  filter(start_year <= 2006 & (is.na(end_year) | end_year >= 2006))
+
+# Filter mayors - 2007
+mayors_2007 <- mayors %>%
+  filter(start_year <= 2007 & (is.na(end_year) | end_year > 2007))
+
+```
+
+# Data wrangling - Geospatial data 
+
+Firstly we convert `denmark` into a simple feature. To ensure that the geometries in the shapefile align with the actual locations for denmark, we transform the crs. The primary projections for visualizing Denmark as a 2D map is EPSG:25832, so we stick to this. 
+To reduce computation time, we simplify the geometry. 
+
+After the transformation the sf object is joined with the population data set. Since the sf object contain more data, we do a left join that adds NA's to rows that don't match instead of removing these. 
+After the merge we rename the municipalities to better fit with the mayors dataframe. 
+
+```{r Data wrangling - Geospatial data }
+
+# transform
+denmark <- st_as_sf(denmark) 
+denmark <- st_transform(denmark, crs = 25832) 
+denmark_simplified <- st_simplify(denmark)
+
+# join denmark and befolkning
+denmark_simplified <- left_join(denmark_simplified, befolkning, by="navn")
+
+# rename the municipalities, so they match the mayor dataframe:
+denmark_simplified$navn <- gsub(" Kommune", "", denmark_simplified$navn, ignore.case = TRUE)
+
+```
+
+
+# Create dataframe for 2006 and 2007
+
+To compare pre- and post-reform, we divide the data into two seperate dataframes. 
+To isolate mechanical changes without confounding factors like variations in electoral votes, we keep only records from 2006 and 2007 respectively, just before and just after the implementation of the reform, both in between elections. 
+
+```{r Seperate dataframe}
+
+## 2006
+### get all municipalities in 2006 before the reform - but established after 1970 - the previous reform
+denmark_2006 <- denmark_simplified[denmark_simplified$fra <= 2006 & (denmark_simplified$til >= 2006 | is.na(denmark_simplified$til)), ]
+
+str(denmark_2006)
+
+#check that there is only one record per municipality: 06
+duplicates_06 <- denmark_2006 %>%
+  group_by(navn) %>%
+  filter(n() > 1)
+print(duplicates_06)
+
+
+## 2007
+#### get all municipalities in 2007 - after the reform 
+denmark_2007 <- denmark_simplified[denmark_simplified$til > 2007 & denmark_simplified$fra < 2008, ] 
+
+str(denmark_2007)
+
+#check that there is only one record per municipality: 07
+duplicates_07 <- denmark_2007 %>%
+  group_by(navn) %>%
+  filter(n() > 1)
+print(duplicates_07)
+
+
+```
+
+# Rename
+There's a huge variety in how municipalities are spelled. Both across districts and time. We need to make sure they are identical.
+Some kommunes have different names before and after the strucutral reform, which makes it impractical to change them prior to seperating the dataframes. So we do this now. 
+
+
+```{r  Rename 2006}
+## 2006
+### List the names of the municipalities in alphabetic order. 
+sort(unique(denmark_2006$navn))
+sort(unique(mayors_2006$Kommunenavn))
+
+# only in the shapefile
+setdiff(denmark_2006$navn, mayors_2006$Kommunenavn)
+
+denmark_2006$navn[denmark_2006$navn == "Københavns"] <- "København"
+denmark_2006$navn[denmark_2006$navn == "Ålborg"] <- "Aalborg" 
+denmark_2006$navn[denmark_2006$navn == "Brøndbyøster-Brøndbyvester"] <- "Brøndby"
+denmark_2006$navn[denmark_2006$navn == "Torslunde-Ishøj"] <- "Ishøj"
+denmark_2006$navn[denmark_2006$navn == "Nørre Rangstrup"] <- "Nr.Rangstrup"
+denmark_2006$navn[denmark_2006$navn == "Åbenrå"] <- "Aabenraa"
+denmark_2006$navn[denmark_2006$navn == "Høje Taastrup"] <- "Høje-Taastrup"
+denmark_2006$navn[denmark_2006$navn == "Bornholms Regionskommune"] <- "Bornholm"
+denmark_2006$navn[denmark_2006$navn == "Nykøbing Falsters"] <- "Nykøbing-Falster"
+denmark_2006$navn[denmark_2006$navn == "Ballerup-Måløv"] <- "Ballerup"
+denmark_2006$navn[denmark_2006$navn == "Nørre Åby"] <- "Nørre-Åby"
+denmark_2006$navn[denmark_2006$navn == "Herstederne"] <- "Albertslund"
+denmark_2006$navn[denmark_2006$navn == "Midtdjurs"] <- "Midt-Djurs"
+denmark_2006$navn[denmark_2006$navn == "Nørre Alslev"] <- "Nr.Alslev"
+denmark_2006$navn[denmark_2006$navn == "Sydlangelands"] <- "Sydlangeland"
+denmark_2006$navn[denmark_2006$navn == "Lyngby-Tårbæk"] <- "Lyngby-Taarbæk"
+denmark_2006$navn[denmark_2006$navn == "Årslev"] <- "Års"
+denmark_2006$navn[denmark_2006$navn == "Årup"] <- "Aarup"
+denmark_2006$navn[denmark_2006$navn == "Nørre Djurs"] <- "Nr.-Djurs"
+denmark_2006$navn[denmark_2006$navn == "Blåvandshuk"] <- "Blåvandshug"
+denmark_2006$navn[denmark_2006$navn == "Nørre Snede"] <- "Nr.-Snede"
+denmark_2006$navn[denmark_2006$navn == "Faxe"] <- "Fakse"
+denmark_2006$navn[denmark_2006$navn == "Søllerød"] <- "Solrød" 
+
+str(denmark_2006)
+
+# only in mayors
+setdiff(mayors_2006$Kommunenavn, denmark_2006$navn) # nothing
+
+```
+
+
+```{r  Rename 2007}
+## 2007
+### List the names of the municipalities in alphabetic order. 
+sort(unique(denmark_2007$navn))
+sort(unique(mayors_2006$Kommunenavn))
+
+# only in denmark
+setdiff(denmark_2007$navn, mayors_2007$Kommunenavn)
+
+denmark_2007$navn[denmark_2007$navn == "Bornholms"] <- "Bornholm"
+denmark_2007$navn[denmark_2007$navn == "Fåborg-Midtfyn"] <- "Faaborg-Midtfyn"
+denmark_2007$navn[denmark_2007$navn == "Københavns"] <- "København"
+denmark_2007$navn[denmark_2007$navn == "Lyngby-Tårbæk"] <- "Lyngby-Taarbæk"
+denmark_2007$navn[denmark_2007$navn == "Åbenrå"] <- "Aabenraa"
+
+
+# only in mayors
+setdiff(mayors_2007$Kommunenavn, denmark_2007$navn)
+
+mayors_2007$Kommunenavn[mayors_2007$Kommunenavn == "Høje-Taastrup"] <- "Høje Tåstrup" 
+mayors_2007$Kommunenavn[mayors_2007$Kommunenavn == "Søllerød"] <- "Solrød" 
+
+str(denmark_2007) # 99 observations, expected 98. 
+
+```
+
+
+# Join spatial and mayoral data
+
+Now, we're ready to join the spatial data with the mayoral data. 
+
+There's some disrepancies between the expected number of municipalities and the one in the data. This is due to wrong encoding in the data. In the data Christiansø is encoded as a municipality, though this is not the case, so we exclude it. 
+
+Ærø municipality was established in 2006 by merging Ærøskøbing and Marstal. So, we exclude these two an keep only Ærø. 
+
+```{r Join}
+## 2006 
+
+### join the sf object with the mayors dataframe
+df_2006 <- full_join(denmark_2006, mayors_2006, join_by("navn" == "Kommunenavn"))
+
+### remove: Ærø municipality - Christansø, not a municipality 
+df_2006 <- subset(df_2006, !(navn %in% c("Marstal", "Ærøskøbing", "Christiansø")))
+
+
+
+## 2007
+### join the sf object with the mayors dataframe
+df_2007 <- full_join(denmark_2007, mayors_2007, join_by("navn" == "Kommunenavn"))
+
+### christiansø is not a municipality 
+df_2007 <- subset(df_2007, navn!="Christiansø")
+
+
+
+```
+
+
+# Visualize using tmap 
+
+We visualize the distribution of mayoral posts between the blocs using "tmap". 
+
+```{r Plot}
+## 2006
+
+p2006 <- df_2006 %>%
+  tm_shape() +
+  tm_polygons("Blok",
+              palette = c("Rød blok" = "red", "Blå blok" = "blue", "Other" = "grey"),
+              legend.hist = TRUE) +  
+  tm_layout(main.title = "Municipalities in 2006",
+            main.title.size = 1.5,
+             frame = TRUE,
+             legend.outside = TRUE,
+             legend.text.size = 1,
+             legend.hist.size = 1,
+             legend.hist.width = 0.75)
+
+
+## 2007
+
+
+p2007 <- df_2007 %>%
+  tm_shape() +
+  tm_polygons("Blok",
+              palette = c("Rød blok" = "red", "Blå blok" = "blue", "Other" = "grey"),
+              legend.hist = TRUE) +  
+  tm_layout(main.title = "Municipalities in 2007",
+            main.title.size = 1.5,
+             frame = TRUE,
+             legend.outside = TRUE,
+             legend.text.size = 1,
+             legend.hist.size = 1,
+             legend.hist.width = 0.75)
+
+
+
+# save the plot
+pdf('out/municipalities.pdf')
+tmap_arrange(p2006, p2007,   outer.margins = 0.02)
+dev.off()
+
+
+```
+
+# Tabel 
+
+We quantify the number of municipalities with a blue vs red mayor in 2006 by summarizing the visualized distribution and calculating the percentages. 
+
+
+```{r Tabel}
+
+# Find the total population for each block
+total_municipalities_2006 <- nrow(df_2006)
+
+block_2006 <- df_2006 %>%
+  group_by(Blok) %>%
+  summarize(municipality_count = n(), 
+            percentage = round(municipality_count/total_municipalities_2006*100))
+block_2006
+
+```
+
+
+# Population
+
+Untill now only looked at number of regions ruled over. To better quantify the "power", we include number of citizens ruled over and generate a barplot displaying the top 30 biggest municipalities with the color of their mayor in 2007. 
+
+I couldn't access data from pre-reform, so this will only display the distribution after. 
+
+
+
+```{r Population}
+
+# Incorporate size of the "municipality"
+## Find the total population for each block
+total_municipalities_2007 <- nrow(df_2007)
+
+block_population <- df_2007 %>%
+  group_by(Blok) %>%
+  summarize(total_population = sum(indbyggertal, na.rm = TRUE),
+            municipality_count = n(),
+            percentage = round(municipality_count/total_municipalities_2007*100))
+
+block_population
+
+# Find the top 30 municipalities by population
+top_30_municipalities <- df_2007 %>%
+  arrange(desc(indbyggertal)) %>%
+  slice_head(n = 30)
+
+
+# Create the bar plot for the top 30 municipalities by population
+
+top30 <- ggplot(top_30_municipalities, aes(x = reorder(navn, -indbyggertal), y = indbyggertal, fill = Blok)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = c("Rød blok" = "red", "Blå blok" = "blue", "Other" = "grey")) +
+  labs(title = "Top 30 Municipalities by Population (2007)", x = "Municipality", y = "Population", fill = "Political Block") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+
+pdf('out/30_biggest_municipalities.pdf')
+top30
+dev.off()
+```
+
+
+# Cartogram
+
+The difference between the municipality size based on population vs area is visualized using a cartogram that controls for the visual weight carried by the bigger municipalities with a low density population, while still protecting the location. 
+
+```{r Cartogram}
+
+# Make a cartogram, scaling the area to the total number people in 2007 
+cart_2007 <- cartogram_cont(df_2007, "indbyggertal")
+
+# Now check the linearity of the total voters per municipality cartogram as opposed to the reality
+plot(df_2007$indbyggertal, st_area(df_2007 , byid = TRUE)) # reality
+plot(cart_2007$indbyggertal, st_area(cart_2007, byid = TRUE)) # cartogram
+
+
+cartogram <- ggplot(cart_2007) +
+  geom_sf(aes(fill = Blok), linewidth = 0, alpha = 0.9) +
+  theme_void() +
+  scale_fill_manual(values = c("Rød blok" = "red", "Blå blok" = "blue", "Other" = "grey"))+
+      labs(title = "Cartogram of the Municipalities - 2007") +
+  theme(
+    text = element_text(color = "#22211d"),
+    plot.background = element_rect(fill = "#f5f5f4", color = NA),
+    panel.background = element_rect(fill = "#f5f5f4", color = NA),
+    legend.background = element_rect(fill = "#f5f5f4", color = NA),
+    plot.title = element_text(
+      size = 22, hjust = 0.5,
+      color = "#4e4d47",
+      margin = margin(
+        b = -0.1, t = 0.4, l = 2,
+        unit = "cm")))
+
+
+pdf('out/cartogram.pdf')
+cartogram
+dev.off()
+
+```
+
+The findings do not support our hypothesis. On the contrary the red bloc seem to have benefitted more from the restructuring, suggesting that gerrymandering was not a part in how the restructuring was performed.  
+
+
+# Discussion
+
+# Morans I
+
+To inspire further research a quick analysis of spatial autocorrelation with Morans I is done.
+The number of old municipalities was 270, that formed into 98. 
+This means that the new municipalities on average consists of `270/98 = 2,75` old. So each municipality would have to merge with two. 
+Therefore, I run a k-nearest neighbors with k = 2 to check for spatial autocorrelation. 
+
+Preferably a further study should include severel ways to define neighbors: Contiguity-Based, either with the rook criterion for municipalities that share a common edge, or queen adjacency for when they share a border. 
+
+I run a	Monte-Carlo simulation of Moran I to get a more robust result. 
+
+
+```{r}
+
+# Check class and validity of dfs
+class(df_2006)
+class(df_2007)
+
+length(st_is_valid(df_2006))
+length(st_is_valid(df_2007))
+
+# Check for empty geometries
+empty_geoms <- df_2006[st_is_empty(df_2006), ]
+empty_geoms <- df_2006[st_is_empty(df_2007), ]
+
+# Remove rows with empty geometries
+df_2006 <- df_2006[!st_is_empty(df_2006), ]
+df_2007 <- df_2007[!st_is_empty(df_2007), ]
+
+# make blok numeric!
+df_2006$Blok <- as.numeric(as.factor(df_2006$Blok))
+df_2007$Blok <- as.numeric(as.factor(df_2007$Blok))
+
+
+# Make neighbor list from 2 nearest neighbours 
+## add a point to be the center
+mun_centers <- st_coordinates(st_centroid(df_2006$geometry))
+nb_k2 <- knn2nb(knearneigh(mun_centers, k = 2))
+
+mun_centers_07 <- st_coordinates(st_centroid(df_2007$geometry))
+nb_k2_07 <- knn2nb(knearneigh(mun_centers_07, k = 2))
+
+pdf('out/nn_2006.pdf')
+plot(df_2006$geometry); plot(nb_k2, mun_centers, col = "red",add = TRUE)
+title(main="Pre-reform (2006) - 2 nearest neighbours")
+dev.off()
+
+
+pdf('out/nn_2007.pdf')
+plot(df_2007$geometry); plot(nb_k2_07, mun_centers_07, col = "red",add = TRUE)
+title(main="Post-reform (2007) - 2 nearest neighbours")
+dev.off()
+
+
+
+# Spatial autocorrelation analysis
+moran_2006 <- moran.test(df_2006$Blok, 
+           nb2listw(nb_k2, style = "W",zero.policy=TRUE),
+           zero.policy=TRUE)
+
+
+moran_2007 <- moran.test(df_2007$Blok, 
+           nb2listw(nb_k2_07, style = "W", zero.policy=TRUE),
+           zero.policy=TRUE)
+
+# Print Moran's I statistics
+print(moran_2006)
+print(moran_2007)
+
+
+
+# run monte carlo simulation for a more robust output. 
+
+mc06 <- moran.mc(df_2006$Blok,
+         nb2listw(nb_k2, zero.policy=TRUE),
+         zero.policy=TRUE, nsim = 999) 
+
+mc07 <- moran.mc(df_2007$Blok,
+         nb2listw(nb_k2_07, zero.policy=TRUE),
+         zero.policy=TRUE, nsim = 999) 
+
+
+plot(mc06)
+
+plot(mc07)
+
+```
+
+Though there's no significant spatial correlation, the Morans statistic is bigger after reform suggesting more geographical clustering for the mayoral distribution. The reason for this could pose an interesting question for further research.
+One interesting approach could also be to model the association between the neighbor lists from the 2006 municipalities and the outcome of the reform. How alike are they?
+
+
+
+# Conclusion
+
+It's evident that the blue bloc did not benefit from the reform in terms of mayoral posts. 
+Instead their percentage of mayoral post decreased from 60 % to 48 % with the red bloc having a 50 % larger amount of citizens under their "local wing".  
+This does not suggest any gerrymandering from the blue bloc. 
+It's recommended to further look into possible factors defining hoe the restructuring is done and which municipalities that merge with which. It's suggested that spatial correlation could be a big factor. 
+
+
