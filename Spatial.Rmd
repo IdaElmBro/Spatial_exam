@@ -6,25 +6,10 @@ output: html_document
 ---
 
 # Description 
-This markdown is produced as the digital product to my 2024 Spatial Analytics exam. 
+This markdown is produced as the digital product to my 2024 Spatial Analytics exam investigating potential gerrymandering in the 2007 structural reform. 
 It generates all the visualizations displayed in the written product. 
 
-The aim of the project is to map the political outcome of the 2007 structural reform to investigate potential gerrymandering in the restructuring of the new municipalities. 
-As the reform was implemented by a single political coalition (the blue bloc), i'm investigating potential  partisan bias in deciding what municipalities to merge. 
-The hypothesis is that it's expressed as optimizing: ***1)*** number of mayoral posts, and ***2)*** number of citizens ruled over by the blue bloc ("Blå blok")
-
-
-## Outcome when running this markdown: 
-The analysis: 
-- Map of the local political structure pre- (2006) and post reform (2007) in terms of mayoral posts for the red and the blue bloc. 
-- Table of the mayoral distribution between blocs pre- (2006) and post reform (2007). 
-- Bar plot of the top 30 biggest municipalities based on population in 2007 and their mayoral color. 
-- Cartogram of the distribution based on population size post reform. 
-
-To guide further discussion, a quick analysis of the spatial autocorrelation is performed. 
-This produces: 
-- Maps of the k = 2 nearest neighbors pre- (2006) and post reform (2007). 
-- Statistics from a Monte-Carlo simulation of Moran I pre- (2006) and post reform (2007). 
+For a description of the project, refer to the README. 
  
 
 ```{r setup, include=FALSE}
@@ -302,9 +287,10 @@ p2006 <- df_2006 %>%
              legend.hist.size = 1,
              legend.hist.width = 0.75)
 
+p2006
+
 
 ## 2007
-
 
 p2007 <- df_2007 %>%
   tm_shape() +
@@ -318,13 +304,14 @@ p2007 <- df_2007 %>%
              legend.text.size = 1,
              legend.hist.size = 1,
              legend.hist.width = 0.75)
-
+p2007
 
 
 # save the plot
 pdf('out/municipalities.pdf')
 tmap_arrange(p2006, p2007,   outer.margins = 0.02)
 dev.off()
+
 
 
 ```
@@ -385,6 +372,7 @@ top30 <- ggplot(top_30_municipalities, aes(x = reorder(navn, -indbyggertal), y =
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
+top30
 
 
 pdf('out/30_biggest_municipalities.pdf')
@@ -423,7 +411,7 @@ cartogram <- ggplot(cart_2007) +
       margin = margin(
         b = -0.1, t = 0.4, l = 2,
         unit = "cm")))
-
+cartogram
 
 pdf('out/cartogram.pdf')
 cartogram
